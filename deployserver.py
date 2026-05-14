@@ -812,7 +812,7 @@ def get_server_ips() -> tuple[str, str]:
 def print_success_box(local_ip: str, public_ip: str) -> None:
     donate_raw   = "Consider donating to support development!"
     donate_plain = donate_raw  # same length, used for width calc
-    doc_line     = "Docs & source: https://github.com/deploymcserver/deploymcserver"
+    doc_line     = "Docs & source: https://github.com/tnacomtr/deploymcserver"
     local_line   = f"Local network:   {local_ip}:25565"
     public_line  = f"Internet (WAN):  {public_ip}:25565"
     title        = "✔  SERVER IS UP AND READY TO PLAY!  ✔"
