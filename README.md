@@ -10,13 +10,13 @@ A single-file Python CLI that goes from a base Linux install to a running, publi
 
 Download and run:
 ```bash
-curl -O https://raw.githubusercontent.com/yourusername/deploymcserver/main/deployserver.py
+curl -O https://raw.githubusercontent.com/tnacomtr/deploymcserver/main/deployserver.py
 sudo python3 deployserver.py
 ```
 
 Or with wget:
 ```bash
-wget https://raw.githubusercontent.com/yourusername/deploymcserver/main/deployserver.py
+wget https://raw.githubusercontent.com/tnacomtr/deploymcserver/main/deployserver.py
 sudo python3 deployserver.py
 ```
 
