@@ -112,7 +112,7 @@ Version lists are always fetched live. If a version just dropped and isn't in th
 ## RCON
 
 **What is RCON?**
-A protocol that lets you send commands to the server remotely without attaching to the console.
+A protocol that lets you open the server's console to execute commands, such as "/op" or "/give @s dirt".
 
 **How do I connect with RCON?**
 ```bash
@@ -143,7 +143,6 @@ Edit the backup script at `/usr/local/bin/minecraft-backup-<service-name>.sh` an
 This tool makes zero outbound calls except to fetch packages and download the server JAR from official sources. No analytics, no phone-home, no machine IDs.
 
 ---
-
 ## Uninstallation
 
 Want to remove the server? The repo includes a cleanup script that reverses everything (stops services, deletes the system user, removes cron jobs, and closes the firewall).
