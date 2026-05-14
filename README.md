@@ -144,6 +144,21 @@ This tool makes zero outbound calls except to fetch packages and download the se
 
 ---
 
+## Uninstallation
+
+Want to remove the server? The repo includes a cleanup script that reverses everything (stops services, deletes the system user, removes cron jobs, and closes the firewall).
+
+```bash
+curl -O https://raw.githubusercontent.com/tnacomtr/deploymcserver/main/uninstall.py
+sudo python3 uninstall.py
+```
+OR 
+
+```bash
+wget https://raw.githubusercontent.com/tnacomtr/deploymcserver/main/uninstall.py
+sudo python3 uninstall.py
+```
+
 ## Frequently Asked Questions
 
 **Is it safe to run a public Minecraft server with this setup?**
