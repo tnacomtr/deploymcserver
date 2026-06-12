@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Uninstaller for deployserver.py — reverses everything the installer did."""
+"""Uninstaller for deployserver.py: reverses everything the installer did."""
 
 import curses
 import glob
@@ -48,7 +48,7 @@ DEBIAN_PACKAGES = (
 # ---------------------------------------------------------------------------
 
 def _run(cmd: str, *, check: bool = False) -> int:
-    result = subprocess.run(cmd, shell=True)
+    result = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if check and result.returncode != 0:
         _warn(f"Command exited {result.returncode}: {cmd}")
     return result.returncode
@@ -60,7 +60,7 @@ def _detect_distro() -> str:
         return "debian"
     if shutil.which("dnf"):
         return "fedora"
-    raise RuntimeError("Could not detect distro — neither apt-get nor dnf found.")
+    raise RuntimeError("Could not detect distro: neither apt-get nor dnf found.")
 
 
 def _find_minecraft_users() -> list[str]:
@@ -89,11 +89,11 @@ def remove_services(services: list[pathlib.Path]) -> None:
     for unit in services:
         name = unit.stem
         _task(f"Stopping and disabling {name}...")
-        _run(f"systemctl stop {name}")
-        _run(f"systemctl disable {name}")
+        subprocess.run(["systemctl", "stop", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "disable", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         unit.unlink(missing_ok=True)
         _done(f"Removed {unit}")
-    _run("systemctl daemon-reload")
+    subprocess.run(["systemctl", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _done("systemd daemon reloaded.")
 
 
@@ -204,7 +204,7 @@ def remove_packages(distro: str, packages: list[str]) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main() -> None:
     if os.geteuid() != 0:
         _critical("This script must be run with sudo.")
         sys.exit(1)
@@ -240,3 +240,21 @@ if __name__ == "__main__":
 
     print()
     _done("Uninstall complete.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        _warn("Interrupted by user. Aborting.")
+        sys.exit(130)
+    except subprocess.CalledProcessError as e:
+        # A removal command failed; show what ran rather than a raw traceback.
+        _critical(f"Command failed (exit {e.returncode}): {e.cmd}")
+        sys.exit(1)
+    except Exception as e:
+        # Surface our own errors, and anything else, as a clean error line
+        # instead of crashing with a stack trace.
+        _critical(str(e) or e.__class__.__name__)
+        sys.exit(1)

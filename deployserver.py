@@ -114,7 +114,7 @@ class Distro(ABC):
     # --- concrete shared helpers ---------------------------------------------
 
     def run(self, cmd: str) -> None:
-        subprocess.run(cmd, shell=True, check=True)
+        subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _refresh_package_db(self) -> None:
         # Distros that need a separate DB refresh (e.g. apt-get update) override this.
@@ -192,19 +192,19 @@ class Distro(ABC):
     # --- service management --------------------------------------------------
 
     def service_enable(self, name: str) -> None:
-        self.run(f"systemctl enable {name}")
+        subprocess.run(["systemctl", "enable", name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def service_disable(self, name: str) -> None:
-        self.run(f"systemctl disable {name}")
+        subprocess.run(["systemctl", "disable", name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def service_start(self, name: str) -> None:
-        self.run(f"systemctl start {name}")
+        subprocess.run(["systemctl", "start", name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def service_stop(self, name: str) -> None:
-        self.run(f"systemctl stop {name}")
+        subprocess.run(["systemctl", "stop", name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def service_restart(self, name: str) -> None:
-        self.run(f"systemctl restart {name}")
+        subprocess.run(["systemctl", "restart", name], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def service_status(self, name: str) -> str:
         result = subprocess.run(
@@ -263,6 +263,7 @@ class Fedora(Distro):
         "nethogs",
         "fail2ban",
         "dnf-automatic",
+        "firewalld",
         "curl",
         "wget",
         "git",
@@ -373,6 +374,7 @@ class Debian(Distro):
         "nethogs",
         "fail2ban",
         "unattended-upgrades",
+        "ufw",
         "curl",
         "wget",
         "git",
@@ -463,8 +465,8 @@ class DistroDetector:
         """Detect the running distro and return the matching Distro instance.
 
         Reads /etc/os-release and checks ID and ID_LIKE to determine the
-        distro family. ID_LIKE covers derivatives — Ubuntu sets
-        ID_LIKE=debian, Rocky Linux sets ID_LIKE="rhel fedora" — so
+        distro family. ID_LIKE covers derivatives (Ubuntu sets
+        ID_LIKE=debian, Rocky Linux sets ID_LIKE="rhel fedora"), so
         derivatives are matched without needing explicit entries.
 
         Returns:
@@ -534,6 +536,39 @@ def get_server_url(ver: str) -> str:
         raise ValueError(f"No server download available for Minecraft {ver!r}")
 
 
+def _version_sort_key(ver: str) -> tuple:
+    """Build a sort key so versions order oldest to newest under an ascending sort.
+
+    Server APIs return their version lists in inconsistent orders (Leaf's is
+    scrambled, Paper's v3 dict is grouped), so we never trust the API order and
+    always sort explicitly. Handles three things:
+
+      * Dotted releases:          1.21.11, 1.20.6, 1.7.10
+      * The new MC/Paper scheme:  26.1.2  (26 > 1, so it sorts above 1.21.x)
+      * pre-release / rc suffixes: a final release is newer than any of its
+        builds, and pre < rc, e.g. 1.21.11-pre5 < 1.21.11-rc1 < 1.21.11
+
+    Unparseable parts degrade to 0 rather than raising, so an odd version
+    string sorts low instead of crashing the picker.
+    """
+    base, _, suffix = ver.partition("-")
+    base_key = tuple(int(p) if p.isdigit() else 0 for p in base.split("."))
+
+    if not suffix:
+        stage = (2, 0)                          # final release: newest
+    elif suffix.startswith("pre"):
+        stage = (0, int(suffix[3:]) if suffix[3:].isdigit() else 0)
+    elif suffix.startswith("rc"):
+        stage = (1, int(suffix[2:]) if suffix[2:].isdigit() else 0)
+    else:
+        stage = (-1, 0)                         # unknown suffix: oldest for this base
+    return (base_key, stage)
+
+
+def _sort_versions_newest_first(versions: list[str]) -> list[str]:
+    return sorted(versions, key=_version_sort_key, reverse=True)
+
+
 # ---------------------------------------------------------------------------
 # ServerType ABC + implementations
 # ---------------------------------------------------------------------------
@@ -576,7 +611,9 @@ class Vanilla(ServerType):
 
 class Paper(ServerType):
 
-    _API = "https://api.papermc.io/v2/projects/paper"
+    # v2 stopped listing new version groups (it is missing 26.x entirely), so we
+    # use the v3 "fill" API, which also embeds the download URL in each build.
+    _API = "https://fill.papermc.io/v3/projects/paper"
 
     def get_name(self) -> str:
         return "Paper"
@@ -585,23 +622,24 @@ class Paper(ServerType):
         try:
             with _urlopen(self._API) as resp:
                 data = json.loads(resp.read())
-            return list(reversed(data["versions"]))
+            # v3 groups versions by minor (e.g. {"26.1": [...], "1.21": [...]}).
+            flat = [v for group in data["versions"].values() for v in group]
+            # Hide pre-releases / release candidates; "-" in the string marks them.
+            # A user who really wants one can still type it directly at the picker.
+            stable = [v for v in flat if "-" not in v]
+            return _sort_versions_newest_first(stable)
         except Exception as e:
             raise RuntimeError(f"Failed to fetch Paper versions: {e}") from e
 
-    def _latest_build(self, version: str) -> int:
-        url = f"{self._API}/versions/{version}"
+    def get_download_url(self, version: str) -> str:
+        url = f"{self._API}/versions/{version}/builds"
         try:
             with _urlopen(url) as resp:
-                data = json.loads(resp.read())
-            return max(data["builds"])
+                builds = json.loads(resp.read())
+            latest = max(builds, key=lambda b: b["id"])
+            return latest["downloads"]["server:default"]["url"]
         except Exception as e:
-            raise RuntimeError(f"Failed to fetch Paper builds for {version!r}: {e}") from e
-
-    def get_download_url(self, version: str) -> str:
-        build = self._latest_build(version)
-        jar = f"paper-{version}-{build}.jar"
-        return f"{self._API}/versions/{version}/builds/{build}/downloads/{jar}"
+            raise RuntimeError(f"Failed to resolve Paper download for {version!r}: {e}") from e
 
 
 class Leaf(ServerType):
@@ -615,7 +653,8 @@ class Leaf(ServerType):
         try:
             with _urlopen(self._API) as resp:
                 data = json.loads(resp.read())
-            return list(reversed(data["versions"]))
+            # Leaf's API returns versions in an arbitrary order, so sort explicitly.
+            return _sort_versions_newest_first(data["versions"])
         except Exception as e:
             raise RuntimeError(f"Failed to fetch Leaf versions: {e}") from e
 
@@ -696,7 +735,7 @@ def create_server_folder(username: str, server_type: str, version: str) -> pathl
         i += 1
     candidate.mkdir()
     # The service runs as the minecraft user, so it needs write access to its own directory.
-    subprocess.run(["chown", "-R", f"{username}:{username}", str(base)], check=True)
+    subprocess.run(["chown", "-R", f"{username}:{username}", str(base)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _done(f"Server folder created: {candidate}")
     return candidate
 
@@ -721,6 +760,8 @@ def run_forge_installer(server_dir: pathlib.Path) -> None:
         ["java", "-jar", str(installer), "--installServer"],
         cwd=server_dir,
         check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     installer.unlink()
     # Pre-1.17 Forge produced a shim jar that needed renaming to server.jar.
@@ -780,7 +821,7 @@ def print_rcon_password(password: str, save_path: pathlib.Path) -> None:
     print(_empty())
     print(_row("⚠  SAVE YOUR RCON PASSWORD  ⚠"))
     print(_empty())
-    # Password in bold white — visible length is just the 8 chars, not the ANSI codes
+    # Password in bold white; visible length is just the 8 chars, not the ANSI codes
     print(_row(f"\033[1;97m{password}\033[0m", visible_len=len(password)))
     print(_empty())
     print(_row(cmd_line))
@@ -896,7 +937,7 @@ def write_systemd_unit(
     )
     unit_path = pathlib.Path(f"/etc/systemd/system/{service_name}.service")
     unit_path.write_text(unit)
-    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "daemon-reload"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _done(f"Systemd unit written: {unit_path}")
 
 
@@ -1014,7 +1055,7 @@ def install_backup_cron(script_path: pathlib.Path, cron_name: str) -> None:
     The job runs as root rather than as the minecraft user because the server
     directory under /opt/<minecraft-user>/ requires elevated read access for
     consistent archiving, and the backup destination is owned by the invoking
-    sudo user — not by the minecraft service account.
+    sudo user, not by the minecraft service account.
 
     Args:
         script_path: Absolute path to the backup shell script to execute.
@@ -1056,7 +1097,7 @@ def check_execution_context() -> None:
         _warn("You are logged in directly as root. Consider using a regular user account.")
 
 
-if __name__ == "__main__":
+def main() -> None:
     check_execution_context()
 
     distro = DistroDetector.detect()
@@ -1121,7 +1162,7 @@ if __name__ == "__main__":
 
     distro.service_enable(service_name)
     distro.service_start(service_name)
-    distro.firewall_allow(22, "tcp")       # SSH — before enabling firewall or we lock ourselves out
+    distro.firewall_allow(22, "tcp")       # SSH: before enabling firewall or we lock ourselves out
     distro.firewall_allow(25565, "tcp")    # Minecraft
     distro.firewall_enable()
 
@@ -1132,3 +1173,21 @@ if __name__ == "__main__":
     print_rcon_password(rcon_password, rcon_save_path)
     local_ip, public_ip = get_server_ips()
     print_success_box(local_ip, public_ip)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        _warn("Interrupted by user. Aborting.")
+        sys.exit(130)
+    except subprocess.CalledProcessError as e:
+        # A shell/command step failed; show what ran rather than a raw traceback.
+        _critical(f"Command failed (exit {e.returncode}): {e.cmd}")
+        sys.exit(1)
+    except Exception as e:
+        # Surface our own RuntimeError/ValueError messages, and anything else,
+        # as a clean error line instead of crashing with a stack trace.
+        _critical(str(e) or e.__class__.__name__)
+        sys.exit(1)
